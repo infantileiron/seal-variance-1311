@@ -1,0 +1,1 @@
+import{request,post}from'./client.js';export const list=()=>request('/trials');export const detail=id=>request('/trials/'+id);export const create=data=>post('/trials',data);export const seal=(id,stage)=>post(`/trials/${id}/stages/${stage}/seal`,{});export const claim=id=>post('/orders/'+id+'/claim',{});export const report=(id,data)=>post('/orders/'+id+'/report',data);

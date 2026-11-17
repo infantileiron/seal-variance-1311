@@ -14,6 +14,7 @@
 2. **拉力录入**：按方案与材料批次登记最大拉力，支持筛选、异常标记与修订；标记样本保留在统计中。
 3. **方差分析**：选择至少两个方案与材料批次，后台 worker 计算 SS、F、p、η²；每次提交冻结参数和测量快照。
 4. **工艺评议**：查看组别均值/标准差，填写推荐方案和至少20字业务理由，负责人签核后冻结，下载 JSON，负责人可查看操作审计。
+5. **淘汰试验**：预设总试条预算与整场误淘汰上限 α，按每工艺每阶段试条数派发测量单；工程师领单回数，阶段封存时按累计拉力判定淘汰，证据不足的工艺保留续测并写明原因。
 
 ### 角色与账号
 
@@ -59,7 +60,7 @@ Docker 默认网络池不足时使用独立可配置子网，默认 `10.253.105.
 | 计算 | SciPy 1.14.1 F 分布尾概率；其余方差分解由 Python 实算 |
 | 队列/数据 | Redis 7、PostgreSQL 16 |
 
-前端无构建步骤。后端可在 `backend/` 创建虚拟环境并安装 `requirements.txt`，设置 `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET` 后运行 `uvicorn src.main:app --reload`，另开终端 `python -m src.worker`。开发时前端请求 `/api/`，Nginx 去掉此代理前缀；直接访问后端时路由不带 `/api`。数据库启动时由 SQLAlchemy 建表，`backend/migrations/001_initial.sql` 提供同等初始 DDL。
+前端无构建步骤。后端可在 `backend/` 创建虚拟环境并安装 `requirements.txt`，设置 `DATABASE_URL`、`REDIS_URL`、`JWT_SECRET` 后运行 `uvicorn src.main:app --reload`，另开终端 `python -m src.worker`。开发时前端请求 `/api/`，Nginx 去掉此代理前缀；直接访问后端时路由不带 `/api`。数据库启动时由 SQLAlchemy 建表，`backend/migrations/001_initial.sql` 与 `002_trials.sql` 提供同等初始 DDL。淘汰试验集成测试在容器内执行 `python -m pytest tests/ -v`（SQLite 即可运行；生产 PostgreSQL 上领单/回数的条件更新与封存行锁真实生效）。
 
 ## 算法口径与失败态
 
@@ -77,9 +78,19 @@ Docker 默认网络池不足时使用独立可配置子网，默认 `10.253.105.
 
 假设为独立样本、组内近似正态和方差齐性；本版不执行正态/方差齐性自动检验或事后多重比较，因此整体显著不说明具体哪两组不同。推荐需人工考虑产品下限、外观、热损伤与能耗，并安排验证。只有本次比较中的工艺可被推荐。签核需先有完整推荐；签核后评议不可覆盖，新建任务留痕。
 
+## 分阶段淘汰口径
+
+**设置**：试验创建时确定参试工艺 G（2–8 种）、每工艺每阶段试条数、总试条预算与整场误淘汰上限 α。最大阶段数 K=⌊预算 ÷（每阶段试条 × G）⌋，预算不足一个完整阶段直接拒绝。淘汰边界 z\*=Φ⁻¹(1−α/((G−1)·K)) 按 Bonferroni 拆分到全部至多 (G−1)·K 次检验，创建即固定并随每阶段留痕；因此任意次查看进度都不提高误判风险，整场误淘汰概率 ≤ α。
+
+**判定**：每阶段封存时汇总本试验全部已回数样本（跨阶段累计），以存活工艺中累计均值最高者为对照，其余工艺作单侧 Welch z 检验；z 超过本阶段边界即淘汰。回数不足 2 条或对照数据不足时无法构造检验，该工艺保留并写明"证据不足"。两组均无变异且均值落后时直接淘汰。被淘汰工艺记录判定阶段与依据，不再参与后续阶段。
+
+**测量单流转**：派单（issued）→ 领单（claimed）→ 回数（reported）；淘汰后未领单撤销（revoked）并释放预算，已领试条不可撤回、可迟回数。迟回数入库并关联原样本，计入后续阶段累计，但不改写已封阶段的判定。封存、淘汰、撤销与下一阶段派单在同一事务生效；半途失败整体回滚，重试不重复派单或入样。领单与回数按条件更新与样本编号唯一约束保证并发安全：并发领单只一人成功，并发回数幂等收敛，试条占用（未撤销单数）任何时刻不超过预算。
+
+**结束**：仅剩一个存活工艺、达到最大阶段数或预算不足以排满下一阶段时试验结束并写明原因。回数样本以测量单号进入拉力台账，可照常用于方差评议。
+
 ## Seed 与一天的工作剧本
 
-随机种子 `3105`。自然键为用户邮箱、工艺编号、样本编号、评议标题；已有对象不覆盖，重复 seed 不增行、不覆盖用户修改。初始3账号、3方案、105样本、1个待执行评议（worker 真实计算）。
+随机种子 `3105`。自然键为用户邮箱、工艺编号、样本编号、评议标题、试验标题与测量单号；已有对象不覆盖，重复 seed 不增行、不覆盖用户修改。初始3账号、3方案、105样本、1个待执行评议（worker 真实计算）、1个进行中淘汰试验（第1阶段9张测量单已全部回数，等待封存判定）。
 
 | 方案 | 温度 ℃ | 保压 s | 压力 MPa | 样本 |
 |---|---:|---:|---:|---:|
@@ -96,6 +107,8 @@ Docker 默认网络池不足时使用独立可配置子网，默认 `10.253.105.
 7. 10:00 起草推荐 HC-S2，说明额外保压时间可能增加能耗，需继续验证外观和封口完整性，不能只根据 p 值选型。
 8. 10:10 负责人登录，检查推荐理由后签核，评议冻结。
 9. 10:20 观察员下载 `seal-variance-<id>.json`，包含快照与签核者，交给试产负责人。
+10. 10:30 工程师打开淘汰试验，核对第 1 阶段 9 张测量单已全部回数（占用 9/36 试条），封存第 1 阶段。
+11. 10:40 查看判定依据：HC-S1、HC-S3 累计均值落后且 z 超过边界 z\*≈2.50，判定淘汰；HC-S2 存活，试验提前结束，27 条试条未消耗。
 
 ## 目录与共享枚举
 
@@ -103,13 +116,14 @@ Docker 默认网络池不足时使用独立可配置子网，默认 `10.253.105.
 frontend/src/  api / stores / types / components/common / hooks / pages / router / utils / constants
 backend/src/   routes / controllers / services / models / schemas / middlewares / utils / constants / config
 backend/scripts/seed_demo.py
-backend/migrations/001_initial.sql
+backend/tests/ 淘汰试验集成测试（创建、早淘汰、迟回数、封存半途失败、并发、权限）
+backend/migrations/001_initial.sql, 002_trials.sql
 ```
 
-共享枚举为 ROLES 与 TASK_STATUS/STATUS：后端 `src/constants/enums.py`，认证判断在 `src/utils/security.py`，状态在 `src/services/assessments.py` 与 `src/worker.py`；前端 `src/constants/enums.js`、`src/components/common/status.js`、`src/app.js`。角色枚举 admin/analyst/viewer；任务状态 queued/running/completed/failed，另有 approved 布尔业务状态。
+共享枚举为 ROLES 与 TASK_STATUS/STATUS：后端 `src/constants/enums.py`，认证判断在 `src/utils/security.py`，状态在 `src/services/assessments.py` 与 `src/worker.py`；前端 `src/constants/enums.js`、`src/components/common/status.js`、`src/app.js`。角色枚举 admin/analyst/viewer；任务状态 queued/running/completed/failed，另有 approved 布尔业务状态。淘汰试验新增试验状态 active/completed、测量单状态 issued/claimed/reported/revoked、参试工艺状态 alive/eliminated，判定逻辑在 `src/services/sequential.py` 与 `src/services/trials.py`。
 
 ## 已知范围
 
-小型项目逐条登记，不含 Excel/CSV 批量导入、删除、分页、自动取样设备连接、事后多重比较或外部电子签名。评议是本地数据库签核。时间戳以 UTC 留痕。前端字体从 Google Fonts 加载，离线时使用指定 serif 回退；核心业务不依赖字体服务。测试脚本、截图与 TESTING.md 位于批次 `test-artifacts/gb-3105/`，源码目录不存放这些证据。
+小型项目逐条登记，不含 Excel/CSV 批量导入、删除、分页、自动取样设备连接、事后多重比较或外部电子签名。评议是本地数据库签核。淘汰试验采用固定 Bonferroni 边界（保守），不含 α 消耗函数曲线、条件功效分析或跨试验排程；封存判定为同步接口，不经过后台 worker。时间戳以 UTC 留痕。前端字体从 Google Fonts 加载，离线时使用指定 serif 回退；核心业务不依赖字体服务。测试脚本、截图与 TESTING.md 位于批次 `test-artifacts/gb-3105/`，源码目录不存放这些证据。
 
 MIT License，见 LICENSE。

@@ -1,1 +1,1 @@
-export const ROLES={admin:'工艺负责人',analyst:'工艺工程师',viewer:'只读观察员'};export const STATUS={queued:'待计算',running:'计算中',completed:'计算完成',failed:'计算失败'};
+export const ROLES={admin:'工艺负责人',analyst:'工艺工程师',viewer:'只读观察员'};export const STATUS={queued:'待计算',running:'计算中',completed:'计算完成',failed:'计算失败'};export const TRIAL_STATUS={active:'进行中',completed:'已结束'};export const ORDER_STATUS={issued:'待领取',claimed:'已领未测',reported:'已回数',revoked:'已撤销'};

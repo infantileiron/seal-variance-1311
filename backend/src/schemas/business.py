@@ -23,3 +23,14 @@ class AssessmentInput(BaseModel):
 class RecommendationInput(BaseModel):
     selected_process_id:int=Field(gt=0)
     recommendation:str=Field(min_length=20,max_length=3000)
+class TrialInput(BaseModel):
+    title:str=Field(min_length=2,max_length=120)
+    lot:str=Field(min_length=1,max_length=60)
+    stage_size:int=Field(ge=2,le=50)
+    budget:int=Field(gt=0,le=5000)
+    alpha:float=Field(gt=0,lt=0.5,allow_inf_nan=False)
+    process_ids:list[int]=Field(min_length=2,max_length=8)
+class ReportInput(BaseModel):
+    force:float=Field(gt=0,le=200,allow_inf_nan=False)
+    flagged:bool=False
+    note:str=Field(default='',max_length=1000)
